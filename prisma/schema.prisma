@@ -1,0 +1,246 @@
+// Prisma schema for DALI shared database
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../lib/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Term {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique @db.VarChar(255)
+  startDate DateTime @map("start_date") @db.Timestamptz(6)
+  endDate   DateTime @map("end_date") @db.Timestamptz(6)
+
+  members          Member[]         @relation("MemberTerms")
+  membersJoined    Member[]         @relation("JoinedTerm")
+  membersGraduated Member[]         @relation("GraduatedTerm")
+  projects         Project[]        @relation("ProjectTerms")
+  teams            Team[]
+  memberTermRoles  MemberTermRole[]
+  courses          Course[]
+
+  @@map("terms")
+}
+
+// ============================================
+// Users & Members
+// ============================================
+
+enum Role {
+  FULLSTACK
+  DATA
+  ENGINES
+  AR_VR
+  UI_UX
+  VIDEO
+  INSTRUCTOR
+  PM
+}
+
+enum Level {
+  P1
+  P2
+  P3
+  C
+  L
+}
+
+// All Dartmouth students who interact with DALI
+model User {
+  id             String   @id @default(uuid()) @db.Uuid
+  dartmouthEmail String   @unique @map("dartmouth_email") @db.VarChar(255)
+  firstName      String?  @map("first_name") @db.VarChar(255)
+  lastName       String?  @map("last_name") @db.VarChar(255)
+  googleId       String?  @unique @map("google_id") @db.VarChar(255)
+  picture        String?  @db.Text
+  emailVerified  Boolean  @default(false) @map("email_verified")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  member      Member? // null = regular student, exists = DALI member
+  enrollments Enrollment[]
+
+  @@index([dartmouthEmail])
+  @@index([googleId])
+  @@map("users")
+}
+
+model HiredRole { // Track all roles a member has been hired for
+  id        String   @id @default(uuid()) @db.Uuid
+  role      Role
+  memberId  String   @map("member_id") @db.Uuid
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  level     Level
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([memberId])
+  @@index([role])
+  @@map("hired_roles")
+}
+
+model Member {
+  id              String      @id @default(uuid()) @db.Uuid
+  userId          String      @unique @map("user_id") @db.Uuid
+  imageUrl        String?     @map("image_url") @db.Text
+  daliEmail       String      @unique @map("dali_email") @db.VarChar(255)
+  hiredRoles      HiredRole[]
+  joinedTermId    String      @map("joined_term_id") @db.Uuid
+  termsInDali     Term[]      @relation("MemberTerms")
+  isActive        Boolean     @default(true) @map("is_active") // The member is active this term
+  isAlum          Boolean     @default(false) @map("is_alum") 
+  graduatedTermId String?     @map("graduated_term_id") @db.Uuid
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  classYear       String?  @map("class_year") @db.VarChar(10)
+  major           String?  @db.VarChar(255)
+  minor           String?  @db.VarChar(255)
+  linkedinUrl     String?  @map("linkedin_url") @db.Text
+  notionPageId    String?  @unique @map("notion_page_id") @db.VarChar(255)
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedTerm      Term             @relation("JoinedTerm", fields: [joinedTermId], references: [id])
+  graduatedTerm   Term?            @relation("GraduatedTerm", fields: [graduatedTermId], references: [id])
+  courses         Course[]         // Courses they instruct
+  team            Team?            @relation("TeamMembers", fields: [teamId], references: [id])
+  teamId          String?          @db.Uuid
+  memberTermRoles MemberTermRole[]
+
+  @@index([daliEmail])
+  @@index([isActive])
+  @@index([joinedTermId])
+  @@index([notionPageId])
+  @@map("members")
+}
+
+model MemberTermRole {
+  id       String @id @default(uuid()) @db.Uuid
+  memberId String @map("member_id") @db.Uuid
+  termId   String @map("term_id") @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id])
+  role     Role
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  term   Term   @relation(fields: [termId], references: [id])
+
+  @@unique([memberId, termId, projectId, role])
+  @@index([memberId])
+  @@index([termId])
+  @@index([projectId])
+  @@map("member_term_roles")
+}
+
+// ============================================
+// Projects and Teams
+// ============================================
+
+enum ProjectStatus {
+  ACCEPTED
+  IN_INTERVIEW
+  REJECTED
+  ACTIVE
+  SHIPPED
+  INACTIVE
+  ON_HOLD
+}
+
+model Project {
+  id              String        @id @default(uuid()) @db.Uuid
+  name            String        @db.VarChar(255)
+  termsInDali     Term[]        @relation("ProjectTerms")
+  teams           Team[]
+  status          ProjectStatus @default(SHIPPED) @map("status")
+
+  pm              String?       @db.VarChar(255)           // PM select
+  partnerEmail    String?       @map("partner_email") @db.VarChar(255)
+  teamEmail       String?       @map("team_email") @db.VarChar(255)
+  weeklySchedule  String?       @map("weekly_schedule") @db.Text
+  zoomLink        String?       @map("zoom_link") @db.Text
+  figmaUrl        String?       @map("figma_url") @db.Text
+  figjamUrl       String?       @map("figjam_url") @db.Text
+  teamDriveUrl    String?       @map("team_drive_url") @db.Text
+  imageAssetsUrl  String?       @map("image_assets_url") @db.Text
+  gcalendarUrl    String?       @map("gcalendar_url") @db.Text
+
+  frontendRepoUrl String?       @map("frontend_repo_url") @db.Text
+  backendRepoUrl  String?       @map("backend_repo_url") @db.Text
+  fullStackRepoUrl String?      @map("full_stack_repo_url") @db.Text
+  agentRepoUrl    String?       @map("agent_repo_url") @db.Text
+  dataRepoUrl     String?       @map("data_repo_url") @db.Text
+  notionPageId    String?       @unique @map("notion_page_id") @db.VarChar(255)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  memberTermRoles MemberTermRole[]
+
+  @@index([notionPageId])
+  @@map("projects")
+}
+
+model Team {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(255)
+  projectId   String   @map("project_id") @db.Uuid
+  termId      String   @map("term_id") @db.Uuid
+  members     Member[] @relation("TeamMembers")
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  project     Project  @relation(fields: [projectId], references: [id])
+  term        Term     @relation(fields: [termId], references: [id])
+
+  @@map("teams")
+}
+
+// ============================================
+// Education (Courses & Enrollments)
+// ============================================
+
+enum CourseType {
+  WORKSHOP
+  MINISERIES
+}
+
+model Course {
+  id          String     @id @default(uuid()) @db.Uuid
+  title       String     @db.VarChar(255)
+  termId      String     @map("term_id") @db.Uuid
+  term        Term       @relation(fields: [termId], references: [id])
+  description String?    @db.Text
+  courseType  CourseType @default(WORKSHOP) @map("course_type")
+  isPublic    Boolean    @default(true) @map("is_public")
+
+  instructorId String? @map("instructor_id") @db.Uuid
+  instructor   Member? @relation(fields: [instructorId], references: [id])
+
+  enrollments Enrollment[]
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([instructorId])
+  @@index([courseType])
+  @@map("courses")
+}
+
+model Enrollment {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  courseId   String   @map("course_id") @db.Uuid
+  enrolledAt DateTime @default(now()) @map("enrolled_at") @db.Timestamptz(6)
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@index([userId])
+  @@index([courseId])
+  @@map("enrollments")
+}
+

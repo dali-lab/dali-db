@@ -1,0 +1,37 @@
+{
+  "name": "@dali/db",
+  "version": "1.0.0",
+  "description": "Shared PostgreSQL database with Prisma for all DALI services",
+  "main": "lib/db-connection.ts",
+  "type": "module",
+  "scripts": {
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:sync": "tsx prisma/sync-from-notion.ts",
+    "db:reset": "prisma migrate reset"
+  },
+  "keywords": [
+    "database",
+    "postgresql",
+    "prisma",
+    "dali"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@notionhq/client": "^4.0.1",
+    "@prisma/adapter-pg": "^5.9.1",
+    "@prisma/client": "^5.9.1",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/pg": "^8.10.9",
+    "prisma": "^5.9.1",
+    "tsx": "^4.7.1"
+  }
+}

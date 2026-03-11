@@ -1,0 +1,26 @@
+# Environment variables
+.env
+.env.local
+
+# Prisma
+lib/generated/
+prisma/migrations/
+
+# Docker volumes (optional - you may want to commit these)
+# postgres_data/
+# pgadmin_data/
+
+# Logs
+*.log
+
+# Backup files
+*.sql
+*.dump
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+package-lock.json
