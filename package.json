@@ -12,7 +12,9 @@
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
     "db:sync": "tsx prisma/sync-from-notion.ts",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
   },
   "keywords": [
     "database",
@@ -26,12 +28,16 @@
     "@notionhq/client": "^4.0.1",
     "@prisma/adapter-pg": "^5.9.1",
     "@prisma/client": "^5.9.1",
-    "pg": "^8.11.3"
+    "express": "^5.2.1",
+    "pg": "^8.11.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^20.11.24",
     "@types/pg": "^8.10.9",
     "prisma": "^5.9.1",
-    "tsx": "^4.7.1"
+    "tsx": "^4.7.1",
+    "typescript": "^5.9.3"
   }
 }

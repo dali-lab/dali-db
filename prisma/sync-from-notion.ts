@@ -15,8 +15,13 @@
  *   npm run db:sync
  *
  * Required env vars:
- *   DATABASE_URL   — Postgres connection string
- *   NOTION_TOKEN   — Notion integration token
+ *   DATABASE_URL                    — Postgres connection string
+ *   NOTION_TOKEN                    — Notion integration token
+ *   NOTION_MEMBERS_DB_ID            — Notion DB: members
+ *   NOTION_PROJECT_CARDS_DB_ID      — Notion DB: project cards (source of truth)
+ *   NOTION_PROJECT_TRACKING_DB_ID   — Notion DB: project tracking (supplemental)
+ *   NOTION_HIRED_ROLES_DB_ID        — Notion DB: hired roles
+ *   NOTION_PROJECT_ASSIGNMENTS_DB_ID — Notion DB: project assignments
  */
 
 import { Client } from "@notionhq/client";
@@ -26,17 +31,22 @@ import { PrismaClient, Role, Level } from "../lib/generated/index.js";
 
 if (!process.env.NOTION_TOKEN) throw new Error("NOTION_TOKEN is not set");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
+if (!process.env.NOTION_MEMBERS_DB_ID) throw new Error("NOTION_MEMBERS_DB_ID is not set");
+if (!process.env.NOTION_PROJECT_CARDS_DB_ID) throw new Error("NOTION_PROJECT_CARDS_DB_ID is not set");
+if (!process.env.NOTION_PROJECT_TRACKING_DB_ID) throw new Error("NOTION_PROJECT_TRACKING_DB_ID is not set");
+if (!process.env.NOTION_HIRED_ROLES_DB_ID) throw new Error("NOTION_HIRED_ROLES_DB_ID is not set");
+if (!process.env.NOTION_PROJECT_ASSIGNMENTS_DB_ID) throw new Error("NOTION_PROJECT_ASSIGNMENTS_DB_ID is not set");
 
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 const prisma = new PrismaClient({ log: ["error"] });
 
-// ─── Notion database IDs ──────────────────────────────────────────────────────
+// ─── Notion database IDs (from env) ────────────────────────────────────────────
 
-const MEMBERS_DB_ID             = "ace087ffbc7f4f6b9f6d36765391e327";
-const PROJECT_CARDS_DB_ID       = "ca06d86bbc3649ba9177afbca41dc266"; // source of truth for projects
-const PROJECT_TRACKING_DB_ID    = "0a15599fd4de4fd79c5bbba83decf3ac"; // supplemental operational fields
-const HIRED_ROLES_DB_ID         = "28ffe958d92f80d9b48cf57acf3add87";
-const PROJECT_ASSIGNMENTS_DB_ID = "1fdfe958d92f8052b512e010806b1a99";
+const MEMBERS_DB_ID             = process.env.NOTION_MEMBERS_DB_ID;
+const PROJECT_CARDS_DB_ID       = process.env.NOTION_PROJECT_CARDS_DB_ID;
+const PROJECT_TRACKING_DB_ID    = process.env.NOTION_PROJECT_TRACKING_DB_ID;
+const HIRED_ROLES_DB_ID         = process.env.NOTION_HIRED_ROLES_DB_ID;
+const PROJECT_ASSIGNMENTS_DB_ID = process.env.NOTION_PROJECT_ASSIGNMENTS_DB_ID;
 
 // ─── Term helpers ─────────────────────────────────────────────────────────────
 

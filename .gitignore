@@ -1,26 +1,23 @@
+# Dependencies
+node_modules/
+lib/node_modules/
+
 # Environment variables
 .env
 .env.local
+.env.*.local
 
-# Prisma
+# Prisma generated client
 lib/generated/
-prisma/migrations/
-
-# Docker volumes (optional - you may want to commit these)
-# postgres_data/
-# pgadmin_data/
 
 # Logs
 *.log
 
-# Backup files
-*.sql
-*.dump
-
 # OS
 .DS_Store
-Thumbs.db
 
-# Node
-node_modules/
-package-lock.json
+# TypeScript
+*.tsbuildinfo
+
+# Lock files (keep package-lock.json)
+lib/package-lock.json
