@@ -25,7 +25,7 @@
  */
 
 import { Client } from "@notionhq/client";
-import { PrismaClient, Role, Level } from "../lib/generated/index.js";
+import { PrismaClient, Role, Level, ProjectStatus, RepoType } from "../lib/generated/index.js";
 
 // ─── Clients ─────────────────────────────────────────────────────────────────
 
@@ -189,6 +189,33 @@ async function syncTerms(termStrings: Set<string>): Promise<Map<string, string>>
   return termIdByName;
 }
 
+// ─── Project status mapping ───────────────────────────────────────────────────
+
+function mapNotionProjectStatus(raw: string | null | undefined, termNames: string[]): ProjectStatus {
+  const s = raw?.toLowerCase().trim() ?? "";
+  let status: ProjectStatus;
+  if (s === "continuing" || s === "active") status = ProjectStatus.ACTIVE;
+  else if (s === "shipping" || s === "shipped") status = ProjectStatus.SHIPPED;
+  else if (s === "inactive" || s === "on hold") status = ProjectStatus.INACTIVE;
+  else if (s === "accepted") status = ProjectStatus.ACCEPTED;
+  else if (s === "in interview") status = ProjectStatus.IN_INTERVIEW;
+  else if (s === "rejected") status = ProjectStatus.REJECTED;
+  else status = ProjectStatus.SHIPPED; // default
+
+  // If the project has terms and its last term matches the current term pattern
+  // (i.e. "term X of X"), treat it as shipped regardless of Notion status.
+  // We detect this by checking if the raw term string includes "of" where the two numbers match.
+  if (status === ProjectStatus.ACTIVE && termNames.length > 0) {
+    const termOfTermPattern = /(\d+)\s+of\s+(\d+)/i;
+    const match = raw?.match(termOfTermPattern);
+    if (match && match[1] === match[2]) {
+      status = ProjectStatus.SHIPPED;
+    }
+  }
+
+  return status;
+}
+
 // ─── Step 2: Sync Projects ────────────────────────────────────────────────────
 // Project Cards DB is the source of truth (name, terms, status, repos).
 // Each card has an optional "Project Hub" relation linking to the tracking DB
@@ -240,21 +267,37 @@ async function syncProjects(
       return arr.find((i: any) => i.type === "url")?.url ?? null;
     };
 
+    const rawStatus = props["Status"]?.select?.name ?? props["status"]?.select?.name ?? null;
+    const status = mapNotionProjectStatus(rawStatus, termNames);
+
+    const repos: { type: RepoType; url: string }[] = [
+      { type: RepoType.FULLSTACK, url: props["Dev Fullstack"]?.url ?? rollupUrl("Frontend Repo-Mobile") },
+      { type: RepoType.BACKEND,   url: rollupUrl("Backend Repo") },
+      { type: RepoType.DATA,      url: props["Data"]?.url },
+      { type: RepoType.AGENT,     url: tracking.agentRepoUrl },
+    ].filter(r => !!r.url) as { type: RepoType; url: string }[];
+
+    // Remove agentRepoUrl from tracking since it's now in repos
+    const { agentRepoUrl: _agent, ...trackingData } = tracking as any;
+
     const data = {
       name,
-      ...tracking,
-      figmaUrl:        props["Figma 1"]?.url ?? rollupUrl("Figma") ?? null,
-      frontendRepoUrl: props["Dev Fullstack"]?.url ?? rollupUrl("Frontend Repo-Mobile") ?? null,
-      backendRepoUrl:  rollupUrl("Backend Repo") ?? null,
-      dataRepoUrl:     props["Data"]?.url ?? null,
+      status,
+      ...trackingData,
+      figmaUrl: props["Figma 1"]?.url ?? rollupUrl("Figma") ?? null,
     };
 
     try {
-      await prisma.project.upsert({
+      const project = await prisma.project.upsert({
         where: { notionPageId },
         update: { ...data, ...(termIds.length ? { termsInDali: { set: termIds.map(id => ({ id })) } } : {}) },
         create: { ...data, notionPageId, ...(termIds.length ? { termsInDali: { connect: termIds.map(id => ({ id })) } } : {}) },
       });
+      // Replace repos for this project
+      await prisma.repo.deleteMany({ where: { projectId: project.id } });
+      if (repos.length) {
+        await prisma.repo.createMany({ data: repos.map(r => ({ projectId: project.id, type: r.type, url: r.url })) });
+      }
       ok++;
     } catch (err: any) {
       console.error(`  ✗ Project "${name}": ${err.message}`);
@@ -295,7 +338,9 @@ async function syncMembers(
   for (const page of pages) {
     const props = page.properties;
     const notionPageId: string = page.id;
-    const name = props.Name?.title?.[0]?.plain_text || "Unknown";
+    const fullName = props.Name?.title?.[0]?.plain_text || "Unknown";
+    const [firstName, ...rest] = fullName.trim().split(" ");
+    const lastName = rest.join(" ") || null;
     const classYear = props.year?.multi_select?.[0]?.name ?? null;
     const { major, minor } = extractMajorMinor(props);
     const linkedinUrl = props.linkedin?.url || props.linkedin?.rich_text?.[0]?.plain_text || null;
@@ -330,13 +375,13 @@ async function syncMembers(
     try {
       let userId: string;
       if (existingMember) {
-        await prisma.user.update({ where: { id: existingMember.userId }, data: { dartmouthEmail, name } });
+        await prisma.user.update({ where: { id: existingMember.userId }, data: { dartmouthEmail, firstName, lastName } });
         userId = existingMember.userId;
       } else {
         const user = await prisma.user.upsert({
           where: { dartmouthEmail },
-          update: { name },
-          create: { dartmouthEmail, name, emailVerified: false },
+          update: { firstName, lastName },
+          create: { dartmouthEmail, firstName, lastName, emailVerified: false },
         });
         userId = user.id;
         // Update the in-memory map now that we have the real userId
@@ -359,7 +404,7 @@ async function syncMembers(
       existingByNotionId.set(notionPageId, { id: member.id, notionPageId, userId, daliEmail });
       ok++;
     } catch (err: any) {
-      console.error(`  ✗ Member "${name}": ${err.message}`);
+      console.error(`  ✗ Member "${fullName}": ${err.message}`);
       failed++;
     }
   }
