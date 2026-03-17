@@ -23,6 +23,8 @@ model Term {
   teams            Team[]
   memberTermRoles  MemberTermRole[]
   courses          Course[]
+  applications     Application[]
+  bids             Bid[]
 
   @@map("terms")
 }
@@ -62,8 +64,9 @@ model User {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  member      Member? // null = regular student, exists = DALI member
-  enrollments Enrollment[]
+  member       Member? // null = regular student, exists = DALI member
+  enrollments  Enrollment[]
+  applications Application[]
 
   @@index([dartmouthEmail])
   @@index([googleId])
@@ -86,7 +89,7 @@ model HiredRole { // Track all roles a member has been hired for
 
 model Member {
   id              String      @id @default(uuid()) @db.Uuid
-  userId          String      @unique @map("user_id") @db.Uuid
+  userId          String?     @unique @map("user_id") @db.Uuid
   imageUrl        String?     @map("image_url") @db.Text
   daliEmail       String      @unique @map("dali_email") @db.VarChar(255)
   hiredRoles      HiredRole[]
@@ -98,19 +101,24 @@ model Member {
   createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  fullName        String?  @map("full_name") @db.VarChar(255)
   classYear       String?  @map("class_year") @db.VarChar(10)
   major           String?  @db.VarChar(255)
   minor           String?  @db.VarChar(255)
   linkedinUrl     String?  @map("linkedin_url") @db.Text
   notionPageId    String?  @unique @map("notion_page_id") @db.VarChar(255)
+  currentRole     String?  @map("current_role") @db.VarChar(255)
+  roles           String[] @default([])
+  coreRoleNames   String[] @default([]) @map("core_role_names")
 
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
   joinedTerm      Term             @relation("JoinedTerm", fields: [joinedTermId], references: [id])
   graduatedTerm   Term?            @relation("GraduatedTerm", fields: [graduatedTermId], references: [id])
   courses         Course[]         // Courses they instruct
   team            Team?            @relation("TeamMembers", fields: [teamId], references: [id])
   teamId          String?          @db.Uuid
   memberTermRoles MemberTermRole[]
+  bids            Bid[]
 
   @@index([daliEmail])
   @@index([isActive])
@@ -138,7 +146,7 @@ model MemberTermRole {
 }
 
 // ============================================
-// Projects and Teams
+// Projects, Partners, and Teams
 // ============================================
 
 enum ProjectStatus {
@@ -151,6 +159,21 @@ enum ProjectStatus {
   ON_HOLD
 }
 
+model Partner {
+  id            String    @id @default(uuid()) @db.Uuid
+  name          String    @db.VarChar(255)
+  email         String    @unique @map("email") @db.VarChar(255)
+  googleId      String?   @unique @map("google_id") @db.VarChar(255)
+  picture       String?   @db.Text
+  emailVerified Boolean   @default(false) @map("email_verified")
+  projects      Project[]
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([googleId])
+  @@map("partners")
+}
+
 model Project {
   id              String        @id @default(uuid()) @db.Uuid
   name            String        @db.VarChar(255)
@@ -158,7 +181,18 @@ model Project {
   teams           Team[]
   status          ProjectStatus @default(SHIPPED) @map("status")
 
-  pm              String?       @db.VarChar(255)           // PM select
+  // Public-facing display fields (from public Notion DB)
+  description     String?       @db.Text
+  sectors         String[]      @default([])
+  product         String[]      @default([])
+  techStack       String[]      @map("tech_stack") @default([])
+  coverImage      String?       @map("cover_image") @db.Text
+  projectUrls     Json          @default("[]") @map("project_urls")
+  partnerNames    String[]      @default([]) @map("partner_names")
+  publicNotionPageId String?    @unique @map("public_notion_page_id") @db.VarChar(255)
+  isPublic           Boolean    @default(false) @map("is_public")
+
+  // Internal operational fields
   partnerEmail    String?       @map("partner_email") @db.VarChar(255)
   teamEmail       String?       @map("team_email") @db.VarChar(255)
   weeklySchedule  String?       @map("weekly_schedule") @db.Text
@@ -171,11 +205,19 @@ model Project {
 
   repos           Repo[]
   notionPageId    String?       @unique @map("notion_page_id") @db.VarChar(255)
+  memberTermRoles MemberTermRole[]
+  bidsPref1       Bid[]         @relation("BidPref1")
+  bidsPref2       Bid[]         @relation("BidPref2")
+  bidsPref3       Bid[]         @relation("BidPref3")
+  bidsAssigned    Bid[]         @relation("BidAssigned")
+  partnerId       String?       @map("partner_id") @db.Uuid
+  partner         Partner?      @relation(fields: [partnerId], references: [id])
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
-  memberTermRoles MemberTermRole[]
 
   @@index([notionPageId])
+  @@index([publicNotionPageId])
+  @@index([partnerEmail])
   @@map("projects")
 }
 
@@ -261,3 +303,125 @@ model Enrollment {
   @@map("enrollments")
 }
 
+// ============================================
+// Bids
+// ============================================
+
+enum ProjectPreference {
+  MENTOR
+  CONTRIBUTOR
+  NONE
+}
+
+model Bid {
+  id              String    @id @default(uuid()) @db.Uuid
+  notionPageId    String?   @unique @map("notion_page_id") @db.VarChar(255)
+
+  memberId        String    @map("member_id") @db.Uuid
+  member          Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  termId          String    @map("term_id") @db.Uuid
+  term            Term      @relation(fields: [termId], references: [id])
+
+  // Project preferences
+  projectPref1Id  String?   @map("project_pref_1_id") @db.Uuid
+  projectPref1    Project?  @relation("BidPref1", fields: [projectPref1Id], references: [id])
+  projectPref2Id  String?   @map("project_pref_2_id") @db.Uuid
+  projectPref2    Project?  @relation("BidPref2", fields: [projectPref2Id], references: [id])
+  projectPref3Id  String?   @map("project_pref_3_id") @db.Uuid
+  projectPref3    Project?  @relation("BidPref3", fields: [projectPref3Id], references: [id])
+
+  // Role preferences (stored as strings — e.g. "UI/UX Des", "Fullstack Dev")
+  rolePref1       String?   @map("role_pref_1") @db.VarChar(255)
+  rolePref2       String?   @map("role_pref_2") @db.VarChar(255)
+  rolePref3       String?   @map("role_pref_3") @db.VarChar(255)
+
+  // Assignment (set by domain leads)
+  assignedProjectId String? @map("assigned_project_id") @db.Uuid
+  assignedProject Project?  @relation("BidAssigned", fields: [assignedProjectId], references: [id])
+  assignedRole    String?   @map("assigned_role") @db.VarChar(255)
+
+  // Preferences & availability
+  preference      ProjectPreference @default(CONTRIBUTOR) @map("preference")
+  hoursPerWeek    String?   @map("hours_per_week") @db.VarChar(50)
+  isMentorThisTerm Boolean  @default(false) @map("is_mentor_this_term")
+  isOnCoreThisTerm Boolean  @default(false) @map("is_on_core_this_term")
+
+  // Free-text fields
+  interest        String?   @db.Text
+  roleQuestion1   String?   @map("role_question_1") @db.Text
+  roleQuestion2   String?   @map("role_question_2") @db.Text
+  roleQuestion3   String?   @map("role_question_3") @db.Text
+  workshopInterest String?  @map("workshop_interest") @db.Text
+  instructorReason String?  @map("instructor_reason") @db.Text
+  allLabIdea      String?   @map("all_lab_idea") @db.Text
+  preferWith      String?   @map("prefer_with") @db.Text
+  preferNotWith   String?   @map("prefer_not_with") @db.Text
+  otherNotes      String?   @map("other_notes") @db.Text
+  otherInvolvement String[] @default([]) @map("other_involvement")
+
+  // Migration status
+  addedToAssignments Boolean @default(false) @map("added_to_assignments")
+  readyToMigrate  Boolean   @default(false) @map("ready_to_migrate")
+
+  submittedAt     DateTime  @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([memberId])
+  @@index([termId])
+  @@index([assignedProjectId])
+  @@index([notionPageId])
+  @@map("bids")
+}
+
+// ============================================
+// Applications
+// ============================================
+
+enum ApplicationStatus {
+  PENDING
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+}
+
+model Application {
+  id             String            @id @default(uuid()) @db.Uuid
+  userId         String            @map("user_id") @db.Uuid
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  termId         String            @map("term_id") @db.Uuid
+  term           Term              @relation(fields: [termId], references: [id])
+  status         ApplicationStatus @default(PENDING)
+  rolesApplied   Role[]            @map("roles_applied")
+  portfolioUrl   String?           @map("portfolio_url") @db.Text
+  resumeUrl      String?           @map("resume_url") @db.Text
+  statement      String?           @db.Text
+  reviewerNotes  String?           @map("reviewer_notes") @db.Text
+  submittedAt    DateTime          @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([userId])
+  @@index([termId])
+  @@index([status])
+  @@map("applications")
+}
+
+// ============================================
+// Auth
+// ============================================
+
+enum AccountType {
+  USER
+  PARTNER
+}
+
+model RefreshToken {
+  id          String      @id @default(uuid()) @db.Uuid
+  tokenHash   String      @unique @map("token_hash") @db.VarChar(64) // SHA256 hex of the actual token
+  accountId   String      @map("account_id") @db.Uuid               // User.id or Partner.id
+  accountType AccountType @map("account_type")
+  expiresAt   DateTime    @map("expires_at") @db.Timestamptz(6)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([accountId, accountType])
+  @@map("refresh_tokens")
+}

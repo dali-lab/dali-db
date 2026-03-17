@@ -22,10 +22,13 @@
  *   NOTION_PROJECT_TRACKING_DB_ID   — Notion DB: project tracking (supplemental)
  *   NOTION_HIRED_ROLES_DB_ID        — Notion DB: hired roles
  *   NOTION_PROJECT_ASSIGNMENTS_DB_ID — Notion DB: project assignments
+ *
+ * The public projects DB (9bbcc845675f4ace99c4a91112a89d78) is hardcoded — it's
+ * the same public-facing DB used by the website and does not change.
  */
 
 import { Client } from "@notionhq/client";
-import { PrismaClient, Role, Level, ProjectStatus, RepoType } from "../lib/generated/index.js";
+import { PrismaClient, Role, Level, ProjectStatus, RepoType, ProjectPreference } from "../lib/generated/index.js";
 
 // ─── Clients ─────────────────────────────────────────────────────────────────
 
@@ -42,11 +45,14 @@ const prisma = new PrismaClient({ log: ["error"] });
 
 // ─── Notion database IDs (from env) ────────────────────────────────────────────
 
-const MEMBERS_DB_ID             = process.env.NOTION_MEMBERS_DB_ID;
-const PROJECT_CARDS_DB_ID       = process.env.NOTION_PROJECT_CARDS_DB_ID;
-const PROJECT_TRACKING_DB_ID    = process.env.NOTION_PROJECT_TRACKING_DB_ID;
-const HIRED_ROLES_DB_ID         = process.env.NOTION_HIRED_ROLES_DB_ID;
-const PROJECT_ASSIGNMENTS_DB_ID = process.env.NOTION_PROJECT_ASSIGNMENTS_DB_ID;
+const MEMBERS_DB_ID              = process.env.NOTION_MEMBERS_DB_ID;
+const PROJECT_CARDS_DB_ID        = process.env.NOTION_PROJECT_CARDS_DB_ID;
+const PROJECT_TRACKING_DB_ID     = process.env.NOTION_PROJECT_TRACKING_DB_ID;
+const HIRED_ROLES_DB_ID          = process.env.NOTION_HIRED_ROLES_DB_ID;
+const PROJECT_ASSIGNMENTS_DB_ID  = process.env.NOTION_PROJECT_ASSIGNMENTS_DB_ID;
+// Public-facing projects DB — same one the website uses for published projects
+const PUBLIC_PROJECTS_DB_ID      = process.env.NOTION_PUBLIC_PROJECTS_DB_ID;
+const BIDS_DB_ID                 = "2b7fe958d92f80f68100edef8335b46c";
 
 // ─── Term helpers ─────────────────────────────────────────────────────────────
 
@@ -218,22 +224,22 @@ function mapNotionProjectStatus(raw: string | null | undefined, termNames: strin
 
 // ─── Step 2: Sync Projects ────────────────────────────────────────────────────
 // Project Cards DB is the source of truth (name, terms, status, repos).
-// Each card has an optional "Project Hub" relation linking to the tracking DB
-// which holds operational fields (pm, emails, zoom, figma, etc.).
+// Public Projects DB provides display fields (description, sectors, cover, urls).
+// Cards and public entries are matched by normalised lowercase name.
 
 async function syncProjects(
   cardPages: any[],
   trackingPages: any[],
+  publicPages: any[],
   termIdByName: Map<string, string>,
 ): Promise<void> {
-  console.log(`\n── Syncing ${cardPages.length} projects (cards) + ${trackingPages.length} tracking entries...`);
+  console.log(`\n── Syncing ${cardPages.length} project cards + ${publicPages.length} public entries...`);
 
   // Build tracking data map: tracking page ID → operational fields
   const trackingByPageId = new Map<string, Record<string, any>>();
   for (const page of trackingPages) {
     const p = page.properties;
     trackingByPageId.set(page.id, {
-      pm:             p.PM?.select?.name ?? null,
       partnerEmail:   p["Partner Email"]?.email ?? null,
       teamEmail:      p["Team Email"]?.email ?? null,
       zoomLink:       p["Zoom Link"]?.url ?? null,
@@ -243,6 +249,48 @@ async function syncProjects(
       gcalendarUrl:   p["GCalendar"]?.url ?? null,
       weeklySchedule: (p["Weekly Schedule"]?.rich_text ?? []).map((t: any) => t.plain_text).join("") || null,
       agentRepoUrl:   p["Agent Repo"]?.url ?? null,
+    });
+  }
+
+  // Build public display data map: normalised name → display fields
+  const publicByName = new Map<string, {
+    publicNotionPageId: string;
+    description: string | null;
+    sectors: string[];
+    product: string[];
+    techStack: string[];
+    coverImage: string | null;
+    projectUrls: Array<{ label: string; url: string }>;
+    partnerNames: string[];
+  }>();
+  for (const page of publicPages) {
+    const p = page.properties;
+    const rawName =
+      (p["Project Name"]?.rich_text?.map((t: any) => t.plain_text).join("") ||
+       p.Statement?.title?.map((t: any) => t.plain_text).join("") || "").trim();
+    if (!rawName) continue;
+    const sectors: string[] = p.Sector?.multi_select?.map((s: any) => s.name) ?? [];
+    const product: string[] = p.Product?.multi_select?.map((s: any) => s.name) ?? [];
+    const techStack: string[] = p["Tech Stack"]?.multi_select?.map((s: any) => s.name) ?? [];
+    const coverImage: string | null =
+      page.cover?.file?.url || page.cover?.external?.url ||
+      p["Logo Image"]?.files?.[0]?.file?.url || p["Logo Image"]?.files?.[0]?.external?.url || null;
+    const projectUrls: Array<{ label: string; url: string }> = [];
+    if (p["Link to Website"]?.url) projectUrls.push({ label: "Website", url: p["Link to Website"].url });
+    if (p["Link to App"]?.url)     projectUrls.push({ label: "App",     url: p["Link to App"].url });
+    if (p["Student Blog"]?.url)    projectUrls.push({ label: "Student Blog", url: p["Student Blog"].url });
+    if (p.Press?.url)              projectUrls.push({ label: "Press",   url: p.Press.url });
+    const partnerNames: string[] = p.Partner?.multi_select?.map((s: any) => s.name) ?? [];
+    const description: string | null = p.Statement?.title?.map((t: any) => t.plain_text).join("").trim() || null;
+    publicByName.set(rawName.toLowerCase(), {
+      publicNotionPageId: page.id,
+      description,
+      sectors,
+      product,
+      techStack,
+      coverImage,
+      projectUrls,
+      partnerNames,
     });
   }
 
@@ -261,6 +309,9 @@ async function syncProjects(
     const trackingPageId: string | undefined = props["Project Hub"]?.relation?.[0]?.id;
     const tracking = trackingPageId ? (trackingByPageId.get(trackingPageId) ?? {}) : {};
 
+    // Merge public display data matched by name
+    const pub = publicByName.get(name.toLowerCase()) ?? null;
+
     // Repos come from rollup fields on the card
     const rollupUrl = (key: string) => {
       const arr = props[key]?.rollup?.array ?? [];
@@ -277,7 +328,6 @@ async function syncProjects(
       { type: RepoType.AGENT,     url: tracking.agentRepoUrl },
     ].filter(r => !!r.url) as { type: RepoType; url: string }[];
 
-    // Remove agentRepoUrl from tracking since it's now in repos
     const { agentRepoUrl: _agent, ...trackingData } = tracking as any;
 
     const data = {
@@ -285,6 +335,17 @@ async function syncProjects(
       status,
       ...trackingData,
       figmaUrl: props["Figma 1"]?.url ?? rollupUrl("Figma") ?? null,
+      // Display fields from public DB (kept if no public match)
+      ...(pub ? {
+        publicNotionPageId: pub.publicNotionPageId,
+        description:        pub.description,
+        sectors:            pub.sectors,
+        product:            pub.product,
+        techStack:          pub.techStack,
+        coverImage:         pub.coverImage,
+        projectUrls:        pub.projectUrls,
+        partnerNames:       pub.partnerNames,
+      } : {}),
     };
 
     try {
@@ -293,7 +354,6 @@ async function syncProjects(
         update: { ...data, ...(termIds.length ? { termsInDali: { set: termIds.map(id => ({ id })) } } : {}) },
         create: { ...data, notionPageId, ...(termIds.length ? { termsInDali: { connect: termIds.map(id => ({ id })) } } : {}) },
       });
-      // Replace repos for this project
       await prisma.repo.deleteMany({ where: { projectId: project.id } });
       if (repos.length) {
         await prisma.repo.createMany({ data: repos.map(r => ({ projectId: project.id, type: r.type, url: r.url })) });
@@ -304,6 +364,29 @@ async function syncProjects(
       fail++;
     }
   }));
+
+  // Upsert public-only projects (published but not in cards DB)
+  let pubOnly = 0;
+  for (const [, pub] of publicByName) {
+    const exists = await prisma.project.findUnique({ where: { publicNotionPageId: pub.publicNotionPageId } });
+    if (exists) continue;
+    // Find by name match
+    const nameMatch = cardPages.find(p =>
+      (p.properties.Name?.title ?? []).map((t: any) => t.plain_text).join("").trim().toLowerCase() ===
+      [...publicByName.entries()].find(([, v]) => v.publicNotionPageId === pub.publicNotionPageId)?.[0]
+    );
+    if (nameMatch) continue; // already handled above
+    // No card match — create a project from public data only
+    try {
+      await prisma.project.upsert({
+        where: { publicNotionPageId: pub.publicNotionPageId },
+        update: { description: pub.description, sectors: pub.sectors, product: pub.product, techStack: pub.techStack, coverImage: pub.coverImage, projectUrls: pub.projectUrls, partnerNames: pub.partnerNames },
+        create: { name: [...publicByName.entries()].find(([, v]) => v.publicNotionPageId === pub.publicNotionPageId)![0], publicNotionPageId: pub.publicNotionPageId, description: pub.description, sectors: pub.sectors, product: pub.product, techStack: pub.techStack, coverImage: pub.coverImage, projectUrls: pub.projectUrls, partnerNames: pub.partnerNames, status: ProjectStatus.SHIPPED },
+      });
+      pubOnly++;
+    } catch { /* skip */ }
+  }
+  if (pubOnly) console.log(`  + ${pubOnly} public-only projects added`);
 
   console.log(`  ✓ ${ok} projects synced${fail ? `, ${fail} failed` : ""}`);
 }
@@ -327,20 +410,19 @@ async function syncMembers(
   const claimedDaliEmails = new Map<string, string>( // daliEmail → notionPageId
     existingMembers.filter(m => m.daliEmail && !m.daliEmail.startsWith("notion-")).map(m => [m.daliEmail, m.notionPageId!])
   );
-  const existingUsers = await prisma.user.findMany({ select: { id: true, dartmouthEmail: true } });
-  const claimedDartmouthEmails = new Map<string, string>( // dartmouthEmail → userId
-    existingUsers.filter(u => !u.dartmouthEmail.startsWith("notion-")).map(u => [u.dartmouthEmail, u.id])
-  );
-
   let ok = 0, skipped = 0, failed = 0;
 
   // Process serially to avoid races on email uniqueness
   for (const page of pages) {
     const props = page.properties;
     const notionPageId: string = page.id;
-    const fullName = props.Name?.title?.[0]?.plain_text || "Unknown";
-    const [firstName, ...rest] = fullName.trim().split(" ");
-    const lastName = rest.join(" ") || null;
+    const fullName = (props.Name?.title?.[0]?.plain_text || "Unknown").trim();
+    const imageUrl: string | null =
+      props.profile?.files?.[0]?.file?.url ||
+      props.profile?.files?.[0]?.external?.url ||
+      props.photo?.files?.[0]?.file?.url ||
+      props.photo?.files?.[0]?.external?.url ||
+      null;
     const classYear = props.year?.multi_select?.[0]?.name ?? null;
     const { major, minor } = extractMajorMinor(props);
     const linkedinUrl = props.linkedin?.url || props.linkedin?.rich_text?.[0]?.plain_text || null;
@@ -356,9 +438,20 @@ async function syncMembers(
     const isAlum = !hasCurrentYearTerm;
     const hiredRoles = hiredRolesByMemberPageId.get(notionPageId) ?? [];
 
-    // Resolve emails, falling back to placeholder on conflict
+    // Role display fields
+    const coreRoleNames: string[] = (props["core role"]?.multi_select ?? []).map((r: any) => r.name);
+    const hiredRoleStrings: string[] = (props["hired roles"]?.multi_select ?? []).map((r: any) => r.name);
+    const currentRoleFormula: string = props["Current Role"]?.formula?.string ?? "";
+    const currentRole: string | null = currentRoleFormula || null;
+    const rolesFromFormula: string[] = currentRoleFormula
+      ? currentRoleFormula.split(",").map((s: string) => s.trim()).filter(Boolean)
+      : hiredRoleStrings;
+    const roles: string[] = [...new Set([...coreRoleNames, ...rolesFromFormula])];
+
+    // Resolve daliEmail — use the value from Notion if present and unclaimed,
+    // otherwise fall back to a placeholder. userId is intentionally left null
+    // so members can self-link via the account page after logging in.
     const rawDaliEmail = props['dali email']?.email as string | null ?? null;
-    const rawDartmouthEmail = props['dartmouth email']?.email as string | null ?? null;
 
     const existingMember = existingByNotionId.get(notionPageId);
 
@@ -367,31 +460,11 @@ async function syncMembers(
     const daliEmail = daliEmailOk ? rawDaliEmail! : `notion-${notionPageId}@dali`;
     if (daliEmailOk) claimedDaliEmails.set(rawDaliEmail!, notionPageId);
 
-    const dartmouthEmailOwner = rawDartmouthEmail ? claimedDartmouthEmails.get(rawDartmouthEmail) : null;
-    const dartmouthEmailOk = rawDartmouthEmail && (!dartmouthEmailOwner || dartmouthEmailOwner === existingMember?.userId);
-    const dartmouthEmail = dartmouthEmailOk ? rawDartmouthEmail! : `notion-${notionPageId}@dartmouth`;
-    if (dartmouthEmailOk && rawDartmouthEmail) claimedDartmouthEmails.set(rawDartmouthEmail, existingMember?.userId ?? "pending");
-
     try {
-      let userId: string;
-      if (existingMember) {
-        await prisma.user.update({ where: { id: existingMember.userId }, data: { dartmouthEmail, firstName, lastName } });
-        userId = existingMember.userId;
-      } else {
-        const user = await prisma.user.upsert({
-          where: { dartmouthEmail },
-          update: { firstName, lastName },
-          create: { dartmouthEmail, firstName, lastName, emailVerified: false },
-        });
-        userId = user.id;
-        // Update the in-memory map now that we have the real userId
-        claimedDartmouthEmails.set(dartmouthEmail, userId);
-      }
-
       const member = await prisma.member.upsert({
         where: { notionPageId },
-        update: { daliEmail, classYear, major, minor, linkedinUrl, isAlum, isActive: !isAlum, termsInDali: { set: termIds.map(id => ({ id })) } },
-        create: { userId, daliEmail, joinedTermId, notionPageId, classYear, major, minor, linkedinUrl, isAlum, isActive: !isAlum, termsInDali: { connect: termIds.map(id => ({ id })) } },
+        update: { fullName, imageUrl, daliEmail, classYear, major, minor, linkedinUrl, isAlum, isActive: !isAlum, currentRole, roles, coreRoleNames, termsInDali: { set: termIds.map(id => ({ id })) } },
+        create: { fullName, imageUrl, daliEmail, joinedTermId, notionPageId, classYear, major, minor, linkedinUrl, isAlum, isActive: !isAlum, currentRole, roles, coreRoleNames, termsInDali: { connect: termIds.map(id => ({ id })) } },
       });
 
       // Sync HiredRoles
@@ -401,7 +474,7 @@ async function syncMembers(
       }
 
       // Update in-memory cache
-      existingByNotionId.set(notionPageId, { id: member.id, notionPageId, userId, daliEmail });
+      existingByNotionId.set(notionPageId, { id: member.id, notionPageId, userId: existingMember?.userId ?? null, daliEmail });
       ok++;
     } catch (err: any) {
       console.error(`  ✗ Member "${fullName}": ${err.message}`);
@@ -498,20 +571,104 @@ async function syncTeamsAndRoles(
   console.log(`  ✓ ${teamOk} teams synced`);
 }
 
+// ─── Step 5: Sync Bids ────────────────────────────────────────────────────────
+
+function mapBidPreference(val: string | null | undefined): ProjectPreference {
+  if (!val) return ProjectPreference.NONE;
+  const v = val.toLowerCase();
+  if (v.includes("mentor")) return ProjectPreference.MENTOR;
+  if (v.includes("contributor") || v.includes("yes")) return ProjectPreference.CONTRIBUTOR;
+  return ProjectPreference.NONE;
+}
+
+async function syncBids(
+  bidPages: any[],
+  termIdByName: Map<string, string>,
+  memberIdByNotionId: Map<string, string>,
+  projectIdByNotionId: Map<string, string>,
+): Promise<void> {
+  console.log(`\n── Syncing ${bidPages.length} bids...`);
+
+  const resolveProject = (props: any, key: string): string | null => {
+    const ids: string[] = props[key]?.relation?.map((r: any) => r.id) ?? [];
+    return ids.map(id => projectIdByNotionId.get(id)).find(Boolean) ?? null;
+  };
+
+  let ok = 0, skipped = 0, failed = 0;
+
+  for (const page of bidPages) {
+    const props = page.properties;
+    const notionPageId: string = page.id;
+
+    const memberNotionIds: string[] = props["DALI Member"]?.relation?.map((r: any) => r.id) ?? [];
+    const memberId = memberNotionIds.map(id => memberIdByNotionId.get(id)).find(Boolean);
+    if (!memberId) { skipped++; continue; }
+
+    const termName: string = props["Term"]?.select?.name || "26S";
+    const termId = termIdByName.get(termName);
+    if (!termId) { skipped++; continue; }
+
+    const data = {
+      memberId,
+      termId,
+      projectPref1Id: resolveProject(props, "Project Pref #1"),
+      projectPref2Id: resolveProject(props, "Project Pref #2"),
+      projectPref3Id: resolveProject(props, "Project Pref #3"),
+      assignedProjectId: resolveProject(props, "Assigned Project"),
+      preference: mapBidPreference(props["Would you like to be on a project this term?"]?.select?.name),
+      hoursPerWeek: props["How many hours a week will you commit to DALI?"]?.select?.name ?? null,
+      isMentorThisTerm: props["Are you a mentor in 26W?"]?.select?.name === "Yes",
+      isOnCoreThisTerm: props["Are you on core in 26W?"]?.select?.name === "Yes",
+      interest: (props["Interest"]?.rich_text ?? []).map((t: any) => t.plain_text).join("").trim() || null,
+      roleQuestion1: (props["Role-Specific Question #1"]?.rich_text ?? []).map((t: any) => t.plain_text).join("").trim() || null,
+      roleQuestion2: (props["Role-Specific Question #2"]?.rich_text ?? []).map((t: any) => t.plain_text).join("").trim() || null,
+      roleQuestion3: (props["Role-Specific Question #3"]?.rich_text ?? []).map((t: any) => t.plain_text).join("").trim() || null,
+      allLabIdea: (props["If you could have any all lab this term, what would it be?"]?.rich_text ?? []).map((t: any) => t.plain_text).join("").trim() || null,
+      preferWith: (props["Is there anyone you would like to be on a project with?"]?.rich_text ?? []).map((t: any) => t.plain_text).join("").trim() || null,
+      preferNotWith: (props["Is there anyone you would not like to be on a project with?"]?.rich_text ?? []).map((t: any) => t.plain_text).join("").trim() || null,
+      otherNotes: (props["Is there anything else you'd like us to know or take into consideration when deciding project assignments?"]?.rich_text ?? []).map((t: any) => t.plain_text).join("").trim() || null,
+      otherInvolvement: props["What else would you be interested in being involved with in the lab?"]?.multi_select?.map((s: any) => s.name) ?? [],
+      addedToAssignments: props["Add to Project Assignments DB"]?.checkbox ?? false,
+      readyToMigrate: props["Ready to Migrate"]?.formula?.boolean ?? false,
+      submittedAt: new Date(page.created_time),
+    };
+
+    try {
+      await prisma.bid.upsert({
+        where: { notionPageId },
+        update: data,
+        create: { ...data, notionPageId },
+      });
+      ok++;
+    } catch (err: any) {
+      console.error(`  ✗ Bid "${notionPageId}": ${err.message}`);
+      failed++;
+    }
+  }
+
+  console.log(`  ✓ ${ok} bids synced, ${skipped} skipped (no member/term match), ${failed} failed`);
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
   console.log("🔄 Starting Notion → Postgres sync...\n");
 
   console.log("── Fetching Notion data (in parallel)...");
-  const [memberPages, cardPages, trackingPages, hiredRolePages, assignmentPages] = await Promise.all([
+  const [memberPages, cardPages, trackingPages, hiredRolePages, assignmentPages, bidPages] = await Promise.all([
     queryAll(MEMBERS_DB_ID, { sorts: [{ property: "started time", direction: "ascending" }, { property: "Name", direction: "ascending" }] }),
     queryAll(PROJECT_CARDS_DB_ID, { sorts: [{ property: "Name", direction: "ascending" }] }),
     queryAll(PROJECT_TRACKING_DB_ID, { sorts: [{ property: "Name", direction: "ascending" }] }),
     queryAll(HIRED_ROLES_DB_ID),
     queryAll(PROJECT_ASSIGNMENTS_DB_ID, { sorts: [{ property: "Name", direction: "ascending" }] }),
+    queryAll(BIDS_DB_ID),
   ]);
-  console.log(`  ${memberPages.length} members, ${cardPages.length} project cards, ${trackingPages.length} tracking, ${hiredRolePages.length} hired roles, ${assignmentPages.length} assignments`);
+
+  // Public projects DB is optional — may not be shared with the integration
+  const publicPages = await queryAll(PUBLIC_PROJECTS_DB_ID, { filter: { property: "Status", select: { equals: "Published" } } })
+    .catch((err: any) => { console.warn(`  ⚠ Public projects DB unavailable (${err.code ?? err.message}) — skipping display fields`); return []; });
+
+  console.log(`  ${memberPages.length} members, ${cardPages.length} project cards, ${trackingPages.length} tracking, ${hiredRolePages.length} hired roles, ${assignmentPages.length} assignments, ${publicPages.length} public projects, ${bidPages.length} bids`);
 
   // Build hired roles map: member notion page ID → [{role, level}]
   const hiredRolesByMemberPageId = new Map<string, Array<{ role: Role; level: Level }>>();
@@ -541,9 +698,16 @@ async function main() {
   }
 
   const termIdByName = await syncTerms(termStrings);
-  await syncProjects(cardPages, trackingPages, termIdByName);
+  await syncProjects(cardPages, trackingPages, publicPages, termIdByName);
   await syncMembers(memberPages, termIdByName, hiredRolesByMemberPageId);
   await syncTeamsAndRoles(assignmentPages, termIdByName, hiredRolesByMemberPageId);
+
+  // Build lookup maps for bids (members and projects are now in DB)
+  const allMembers = await prisma.member.findMany({ select: { id: true, notionPageId: true } });
+  const memberIdByNotionId = new Map(allMembers.filter(m => m.notionPageId).map(m => [m.notionPageId!, m.id]));
+  const allProjects = await prisma.project.findMany({ select: { id: true, notionPageId: true } });
+  const projectIdByNotionId = new Map(allProjects.filter(p => p.notionPageId).map(p => [p.notionPageId!, p.id]));
+  await syncBids(bidPages, termIdByName, memberIdByNotionId, projectIdByNotionId);
 
   console.log("\n✅ Sync complete.");
 }

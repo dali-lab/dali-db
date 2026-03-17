@@ -12,6 +12,7 @@
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
     "db:sync": "tsx prisma/sync-from-notion.ts",
+    "bids:sync": "tsx prisma/sync-bids-from-notion.ts",
     "db:reset": "prisma migrate reset",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts"
@@ -28,16 +29,23 @@
     "@notionhq/client": "^4.0.1",
     "@prisma/adapter-pg": "^5.9.1",
     "@prisma/client": "^5.9.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
     "express": "^5.2.1",
+    "google-auth-library": "^10.6.1",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.11.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.11.24",
     "@types/pg": "^8.10.9",
     "prisma": "^5.9.1",
-    "tsx": "^4.7.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

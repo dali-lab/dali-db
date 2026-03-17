@@ -4,13 +4,14 @@ import { Role } from "../../lib/generated/index.js";
 
 const router = Router();
 
-// GET /members?term=25W&role=FULLSTACK&active=true&page=1&limit=10
+// GET /members?term=25W&role=FULLSTACK&active=true&page=1&limit=10&format=team
+// format=team returns the TeamMember shape expected by the frontend Team page
 router.get("/", async (req, res) => {
   try {
-    const { term, role, active } = req.query;
+    const { term, role, active, format } = req.query;
 
     const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 10;
+    const limit = parseInt(req.query.limit as string) || (format === "team" ? 500 : 10);
     const offset = (page - 1) * limit;
 
     const members = await prisma.member.findMany({
@@ -24,14 +25,45 @@ router.get("/", async (req, res) => {
       include: {
         user: true,
         hiredRoles: true,
-        termsInDali: true,
-        joinedTerm: true,
-        graduatedTerm: true,
-        memberTermRoles: { include: { term: true, project: true } },
+        termsInDali: { select: { name: true } },
+        joinedTerm: { select: { name: true } },
+        graduatedTerm: { select: { name: true } },
+        memberTermRoles: { include: { term: { select: { name: true } }, project: { select: { name: true } } } },
         team: true,
         courses: true,
       },
     });
+
+    if (format === "team") {
+      const shaped = members.map(m => {
+        const name =
+          m.fullName ??
+          (m.user ? `${m.user.firstName ?? ""} ${m.user.lastName ?? ""}`.trim() || null : null) ??
+          m.daliEmail;
+
+        const termsInDali = m.termsInDali.map(t => t.name);
+        const hiredRoleStrings = m.hiredRoles.map(r => r.role.toLowerCase());
+
+        return {
+          id: m.id,
+          name,
+          role: m.roles[0] ?? m.currentRole ?? hiredRoleStrings[0] ?? "",
+          roles: m.roles.length ? m.roles : hiredRoleStrings,
+          hiredRoles: hiredRoleStrings,
+          coreRoleNames: m.coreRoleNames,
+          currentRole: m.currentRole ?? "",
+          year: m.classYear ?? "",
+          majorMinor: [m.major, m.minor].filter(Boolean).join(", "),
+          termsInDali,
+          profileImage: m.imageUrl ?? m.user?.picture ?? "",
+          linkedinUrl: m.linkedinUrl ?? "",
+          isAlum: m.isAlum,
+          isActive: m.isActive,
+          notionPageId: m.notionPageId,
+        };
+      });
+      return res.json({ members: shaped });
+    }
 
     res.json(members);
   } catch (err: any) {
@@ -64,7 +96,6 @@ router.get("/:id", async (req, res) => {
 });
 
 // PATCH /members/:id
-// Body: { daliEmail?, imageUrl?, classYear?, major?, minor?, linkedinUrl?, isActive?, isAlum?, graduatedTermName? }
 router.patch("/:id", async (req, res) => {
   try {
     const {
@@ -103,8 +134,6 @@ router.patch("/:id", async (req, res) => {
 });
 
 // POST /members
-// Creates a User (if not existing) and a Member in one transaction.
-// Body: { dartmouthEmail, daliEmail, joinedTermName, firstName?, lastName?, imageUrl?, classYear?, major?, minor?, linkedinUrl? }
 router.post("/", async (req, res) => {
   try {
     const {
@@ -138,10 +167,7 @@ router.post("/", async (req, res) => {
           linkedinUrl,
           termsInDali: { connect: { id: term.id } },
         },
-        include: {
-          user: true,
-          joinedTerm: true,
-        },
+        include: { user: true, joinedTerm: true },
       });
     });
 
