@@ -11,6 +11,7 @@ import termsRouter from "./routes/terms.js";
 import coursesRouter from "./routes/courses.js";
 import applicationsRouter from "./routes/applications.js";
 import bidsRouter from "./routes/bids.js";
+import accessGroupsRouter from "./routes/access-groups.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -40,6 +41,7 @@ app.use("/terms", termsRouter);
 app.use("/courses", coursesRouter);
 app.use("/applications", applicationsRouter);
 app.use("/bids", bidsRouter);
+app.use("/access-groups", accessGroupsRouter);
 
 app.listen(PORT, () => {
   console.log(`dali-db API running on port ${PORT}`);

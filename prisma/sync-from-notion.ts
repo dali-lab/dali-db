@@ -401,6 +401,11 @@ async function syncMembers(
   console.log(`\n── Syncing ${pages.length} members...`);
   const academicYearTerms = getCurrentAcademicYearTerms();
 
+  // Fallback accepted term for new members whose terms haven't been populated
+  // in Notion yet — use the most recent term we know about.
+  const currentTermName = [...academicYearTerms].filter(t => termIdByName.has(t)).sort().at(-1);
+  const fallbackTermId = currentTermName ? termIdByName.get(currentTermName) : undefined;
+
   // Prefetch all existing members and users in bulk
   const existingMembers = await prisma.member.findMany({
     select: { id: true, notionPageId: true, userId: true, daliEmail: true },
@@ -430,12 +435,13 @@ async function syncMembers(
     const memberTermNames = extractMemberTermNames(props);
     const termIds = memberTermNames.map(t => termIdByName.get(t)).filter((id): id is string => !!id);
     const sortedTermIds = memberTermNames.filter(t => termIdByName.has(t)).sort().map(t => termIdByName.get(t) as string);
-    const joinedTermId = sortedTermIds[0];
+    const joinedTermId = sortedTermIds[0] ?? fallbackTermId;
 
     if (!joinedTermId) { skipped++; continue; }
 
     const hasCurrentYearTerm = memberTermNames.some(t => academicYearTerms.has(t));
-    const isAlum = !hasCurrentYearTerm;
+    // New members with no terms yet (using fallback) are active, not alums
+    const isAlum = memberTermNames.length > 0 ? !hasCurrentYearTerm : false;
     const hiredRoles = hiredRolesByMemberPageId.get(notionPageId) ?? [];
 
     // Role display fields
@@ -694,6 +700,10 @@ async function main() {
   }
   for (const page of assignmentPages) {
     const t = page.properties["Term"]?.select?.name;
+    if (t) termStrings.add(t);
+  }
+  for (const page of bidPages) {
+    const t = page.properties["Term"]?.select?.name || "26S";
     if (t) termStrings.add(t);
   }
 

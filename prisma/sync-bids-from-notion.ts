@@ -50,8 +50,12 @@ async function main() {
   const members = await prisma.member.findMany({ select: { id: true, notionPageId: true } });
   const memberByNotionId = new Map(members.filter(m => m.notionPageId).map(m => [m.notionPageId!, m.id]));
 
-  const projects = await prisma.project.findMany({ select: { id: true, notionPageId: true } });
-  const projectByNotionId = new Map(projects.filter(p => p.notionPageId).map(p => [p.notionPageId!, p.id]));
+  const projects = await prisma.project.findMany({ select: { id: true, notionPageId: true, publicNotionPageId: true } });
+  const projectByNotionId = new Map<string, string>();
+  for (const p of projects) {
+    if (p.notionPageId) projectByNotionId.set(p.notionPageId, p.id);
+    if (p.publicNotionPageId) projectByNotionId.set(p.publicNotionPageId, p.id);
+  }
 
   const terms = await prisma.term.findMany({ select: { id: true, name: true } });
   const termByName = new Map(terms.map(t => [t.name, t.id]));
@@ -81,7 +85,12 @@ async function main() {
 
     const resolveProject = (key: string) => {
       const ids: string[] = props[key]?.relation?.map((r: any) => r.id) ?? [];
-      return ids.map((id: string) => projectByNotionId.get(id)).find(Boolean) ?? null;
+      const resolved = ids.map((id: string) => projectByNotionId.get(id)).find(Boolean) ?? null;
+      if (ids.length > 0 && !resolved) {
+        const name = props.Name?.title?.[0]?.plain_text ?? "?";
+        console.warn(`  warn (no project match for ${key}): ${name} — notion ids: ${ids.join(", ")}`);
+      }
+      return resolved;
     };
 
     const data = {

@@ -28,7 +28,7 @@ router.get("/", async (req, res) => {
         termsInDali: { select: { name: true } },
         joinedTerm: { select: { name: true } },
         graduatedTerm: { select: { name: true } },
-        memberTermRoles: { include: { term: { select: { name: true } }, project: { select: { name: true } } } },
+        memberTermRoles: { include: { term: { select: { name: true } }, project: { select: { id: true, name: true } } } },
         team: true,
         courses: true,
       },
@@ -133,12 +133,53 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
+// POST /members/:id/roles — add a new hired role
+router.post("/:id/roles", async (req, res) => {
+  try {
+    const { role, level } = req.body;
+    if (!role || !level) return res.status(400).json({ error: "role and level are required" });
+    const hiredRole = await prisma.hiredRole.create({
+      data: { memberId: req.params.id, role: role as Role, level },
+    });
+    res.status(201).json(hiredRole);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /members/:id/roles/:roleId — update level of an existing hired role
+router.patch("/:id/roles/:roleId", async (req, res) => {
+  try {
+    const { level } = req.body;
+    if (!level) return res.status(400).json({ error: "level is required" });
+    const hiredRole = await prisma.hiredRole.update({
+      where: { id: req.params.roleId },
+      data: { level },
+    });
+    res.json(hiredRole);
+  } catch (err: any) {
+    if (err.code === "P2025") return res.status(404).json({ error: "Role not found" });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /members/:id/roles/:roleId
+router.delete("/:id/roles/:roleId", async (req, res) => {
+  try {
+    await prisma.hiredRole.delete({ where: { id: req.params.roleId } });
+    res.status(204).end();
+  } catch (err: any) {
+    if (err.code === "P2025") return res.status(404).json({ error: "Role not found" });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /members
 router.post("/", async (req, res) => {
   try {
     const {
       dartmouthEmail, daliEmail, joinedTermName,
-      firstName, lastName, imageUrl, classYear, major, minor, linkedinUrl,
+      fullName, firstName, lastName, imageUrl, classYear, major, minor, linkedinUrl,
     } = req.body;
 
     if (!dartmouthEmail || !daliEmail || !joinedTermName) {
@@ -158,6 +199,7 @@ router.post("/", async (req, res) => {
       return tx.member.create({
         data: {
           userId: user.id,
+          fullName,
           daliEmail,
           joinedTermId: term.id,
           imageUrl,

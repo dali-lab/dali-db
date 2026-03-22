@@ -24,17 +24,25 @@ router.get("/", async (req, res) => {
         termsInDali: { select: { name: true } },
         teams: {
           include: {
+            term: { select: { name: true } },
             members: { select: { fullName: true, user: { select: { firstName: true, lastName: true } } } },
           },
+          orderBy: { term: { startDate: "asc" } },
         },
       },
       orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
     });
 
     const shaped = projects.map(p => {
+      // All unique members across all terms (for backwards compat)
       const teamMembers = [
         ...new Set(p.teams.flatMap(t => t.members.map(memberName).filter((n): n is string => !!n))),
       ];
+      // Teams grouped by term
+      const teamsByTerm: { term: string; members: string[] }[] = p.teams.map(t => ({
+        term: t.term.name,
+        members: t.members.map(memberName).filter((n): n is string => !!n),
+      }));
       const term = p.termsInDali.at(-1)?.name ?? "";
 
       return {
@@ -49,6 +57,7 @@ router.get("/", async (req, res) => {
         techStack: p.techStack,
         term,
         teamMembers,
+        teamsByTerm,
         coverImage: p.coverImage ?? "",
         projectUrls: p.projectUrls as Array<{ label: string; url: string }>,
         partnerNames: p.partnerNames,
@@ -105,6 +114,7 @@ router.get("/:id", async (req, res) => {
         repos: true,
         teams: {
           include: {
+            term: { select: { name: true } },
             members: {
               select: {
                 id: true,
@@ -116,6 +126,7 @@ router.get("/:id", async (req, res) => {
               },
             },
           },
+          orderBy: { term: { startDate: "asc" } },
         },
       },
     });
@@ -125,6 +136,10 @@ router.get("/:id", async (req, res) => {
     const teamMembers = [
       ...new Set(project.teams.flatMap(t => t.members.map(memberName).filter((n): n is string => !!n))),
     ];
+    const teamsByTerm: { term: string; members: string[] }[] = project.teams.map(t => ({
+      term: t.term.name,
+      members: t.members.map(memberName).filter((n): n is string => !!n),
+    }));
 
     res.json({
       ...project,
@@ -132,7 +147,66 @@ router.get("/:id", async (req, res) => {
       sector: project.sectors[0] ?? undefined,
       term: project.termsInDali.at(-1)?.name ?? "",
       teamMembers,
+      teamsByTerm,
       projectUrls: project.projectUrls as Array<{ label: string; url: string }>,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /projects/:id
+router.patch("/:id", async (req, res) => {
+  try {
+    const { status, isPublic, description } = req.body;
+
+    const project = await prisma.project.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!project) return res.status(404).json({ error: "Project not found" });
+
+    const updated = await prisma.project.update({
+      where: { id: req.params.id },
+      data: {
+        ...(status !== undefined && { status: status as ProjectStatus }),
+        ...(isPublic !== undefined && { isPublic }),
+        ...(description !== undefined && { description }),
+      },
+      include: {
+        termsInDali: { select: { name: true } },
+        teams: {
+          include: {
+            term: { select: { name: true } },
+            members: { select: { fullName: true, user: { select: { firstName: true, lastName: true } } } },
+          },
+          orderBy: { term: { startDate: "asc" } },
+        },
+      },
+    });
+
+    const teamMembers = [
+      ...new Set(updated.teams.flatMap(t => t.members.map(memberName).filter((n): n is string => !!n))),
+    ];
+    const teamsByTerm = updated.teams.map(t => ({
+      term: t.term.name,
+      members: t.members.map(memberName).filter((n): n is string => !!n),
+    }));
+
+    res.json({
+      id: updated.id,
+      name: updated.name,
+      description: updated.description ?? "",
+      status: updated.status,
+      tags: [...updated.sectors, ...updated.product, ...updated.techStack],
+      sectors: updated.sectors,
+      product: updated.product,
+      techStack: updated.techStack,
+      term: updated.termsInDali.at(-1)?.name ?? "",
+      teamMembers,
+      teamsByTerm,
+      coverImage: updated.coverImage ?? "",
+      projectUrls: updated.projectUrls as Array<{ label: string; url: string }>,
+      partnerNames: updated.partnerNames,
+      notionPageId: updated.notionPageId,
+      isPublic: updated.isPublic,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

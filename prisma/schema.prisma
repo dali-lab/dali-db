@@ -15,9 +15,12 @@ model Term {
   name      String   @unique @db.VarChar(255)
   startDate DateTime @map("start_date") @db.Timestamptz(6)
   endDate   DateTime @map("end_date") @db.Timestamptz(6)
+  /// When true, this term is the operational "current" term (see GET /terms/current). At most one should be true.
+  isCurrent Boolean  @default(false) @map("is_current")
 
   members          Member[]         @relation("MemberTerms")
   membersJoined    Member[]         @relation("JoinedTerm")
+  membersStarting  Member[]         @relation("StartingTerm")
   membersGraduated Member[]         @relation("GraduatedTerm")
   projects         Project[]        @relation("ProjectTerms")
   teams            Team[]
@@ -94,6 +97,7 @@ model Member {
   daliEmail       String      @unique @map("dali_email") @db.VarChar(255)
   hiredRoles      HiredRole[]
   joinedTermId    String      @map("joined_term_id") @db.Uuid
+  startingTermId  String?     @map("starting_term_id") @db.Uuid
   termsInDali     Term[]      @relation("MemberTerms")
   isActive        Boolean     @default(true) @map("is_active") // The member is active this term
   isAlum          Boolean     @default(false) @map("is_alum") 
@@ -113,16 +117,20 @@ model Member {
 
   user            User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
   joinedTerm      Term             @relation("JoinedTerm", fields: [joinedTermId], references: [id])
+  startingTerm    Term?            @relation("StartingTerm", fields: [startingTermId], references: [id])
   graduatedTerm   Term?            @relation("GraduatedTerm", fields: [graduatedTermId], references: [id])
   courses         Course[]         // Courses they instruct
   team            Team?            @relation("TeamMembers", fields: [teamId], references: [id])
   teamId          String?          @db.Uuid
   memberTermRoles MemberTermRole[]
   bids            Bid[]
+  bidsAsMentor    Bid[]            @relation("BidMentor")
+  accessGroups    AccessGroupMember[]
 
   @@index([daliEmail])
   @@index([isActive])
   @@index([joinedTermId])
+  @@index([startingTermId])
   @@index([notionPageId])
   @@map("members")
 }
@@ -359,6 +367,12 @@ model Bid {
   otherNotes      String?   @map("other_notes") @db.Text
   otherInvolvement String[] @default([]) @map("other_involvement")
 
+  // Mentorship overrides (admin-set, null = not overridden)
+  mentorOptOut    Boolean?  @map("mentor_opt_out")
+  mentorId        String?   @map("mentor_id") @db.Uuid
+  mentor          Member?   @relation("BidMentor", fields: [mentorId], references: [id])
+  externalMentor  String?   @map("external_mentor") @db.VarChar(255)
+
   // Migration status
   addedToAssignments Boolean @default(false) @map("added_to_assignments")
   readyToMigrate  Boolean   @default(false) @map("ready_to_migrate")
@@ -403,6 +417,35 @@ model Application {
   @@index([termId])
   @@index([status])
   @@map("applications")
+}
+
+// ============================================
+// Access Control
+// ============================================
+
+model AccessGroup {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(255)
+  description String?  @db.Text
+  permissions String[] @default([])
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  members AccessGroupMember[]
+
+  @@map("access_groups")
+}
+
+model AccessGroupMember {
+  groupId  String      @map("group_id")  @db.Uuid
+  memberId String      @map("member_id") @db.Uuid
+  group    AccessGroup @relation(fields: [groupId],  references: [id], onDelete: Cascade)
+  member   Member      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  addedAt  DateTime    @default(now()) @map("added_at") @db.Timestamptz(6)
+
+  @@id([groupId, memberId])
+  @@index([memberId])
+  @@map("access_group_members")
 }
 
 // ============================================
