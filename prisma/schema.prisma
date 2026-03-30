@@ -45,6 +45,8 @@ enum Role {
   VIDEO
   INSTRUCTOR
   PM
+  THREE_D_MODELING
+  ANIMATION
 }
 
 enum Level {
@@ -110,6 +112,7 @@ model Member {
   major           String?  @db.VarChar(255)
   minor           String?  @db.VarChar(255)
   linkedinUrl     String?  @map("linkedin_url") @db.Text
+  githubId        String?  @map("github_id") @db.VarChar(255)
   notionPageId    String?  @unique @map("notion_page_id") @db.VarChar(255)
   currentRole     String?  @map("current_role") @db.VarChar(255)
   roles           String[] @default([])
@@ -212,6 +215,8 @@ model Project {
   gcalendarUrl    String?       @map("gcalendar_url") @db.Text
 
   repos           Repo[]
+  slackChannelId  String?       @map("slack_channel_id") @db.VarChar(255)
+  githubTeamSlug  String?       @map("github_team_slug") @db.VarChar(255)
   notionPageId    String?       @unique @map("notion_page_id") @db.VarChar(255)
   memberTermRoles MemberTermRole[]
   bidsPref1       Bid[]         @relation("BidPref1")

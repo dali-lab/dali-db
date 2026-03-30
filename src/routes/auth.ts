@@ -112,6 +112,19 @@ router.post("/google/member", async (req: Request, res: Response) => {
       include: { member: true },
     });
 
+    // Auto-link Member record if not yet linked
+    if (!user.member) {
+      await prisma.member.updateMany({
+        where: { daliEmail: email, userId: null },
+        data: { userId: user.id },
+      });
+    }
+
+    const member = user.member ?? await prisma.member.findUnique({ where: { daliEmail: email }, include: { user: true } });
+
+    // dartmouthLinked = the member's linked User has a @dartmouth.edu email (not @dali)
+    const dartmouthLinked = !!(member as any)?.user?.dartmouthEmail?.endsWith("@dartmouth.edu");
+
     const accessToken = await issueTokens(res, user.id, "USER");
 
     return res.json({
@@ -122,7 +135,8 @@ router.post("/google/member", async (req: Request, res: Response) => {
         firstName: user.firstName,
         lastName: user.lastName,
         picture: user.picture,
-        isMember: !!user.member,
+        isMember: !!member,
+        dartmouthLinked,
       },
     });
   } catch (err: any) {
@@ -277,8 +291,9 @@ router.post("/refresh", async (req: Request, res: Response) => {
 });
 
 // ── POST /auth/link-member ─────────────────────────────────────────────────
-// Links the authenticated User to their Member record by matching
-// user.dartmouthEmail === member.daliEmail. Bearer JWT required.
+// Called by a logged-in DALI member (@dali.dartmouth.edu). They provide their
+// @dartmouth.edu email; we find that User and set Member.userId = dartmouth_user.id
+// so that logging in with the Dartmouth account also shows isMember=true.
 
 router.post("/link-member", async (req: Request, res: Response) => {
   try {
@@ -298,24 +313,35 @@ router.post("/link-member", async (req: Request, res: Response) => {
       return res.status(403).json({ error: "Only USER accounts can link a DALI profile" });
     }
 
-    const user = await prisma.user.findUnique({
+    // Caller must be a DALI member user (has a Member record)
+    const callerUser = await prisma.user.findUnique({
       where: { id: payload.id },
       include: { member: true },
     });
 
-    if (!user) return res.status(404).json({ error: "User not found" });
-    if (user.member) return res.status(409).json({ error: "Account is already linked to a DALI profile" });
+    if (!callerUser) return res.status(404).json({ error: "User not found" });
 
-    const member = await prisma.member.findUnique({
-      where: { daliEmail: user.dartmouthEmail },
+    const member = callerUser.member;
+    if (!member) return res.status(404).json({ error: "No DALI profile found for your account" });
+
+    // The Dartmouth email they want to link to
+    const { dartmouthEmail } = req.body;
+    if (!dartmouthEmail || !dartmouthEmail.endsWith("@dartmouth.edu")) {
+      return res.status(400).json({ error: "A valid @dartmouth.edu email is required" });
+    }
+
+    const dartmouthUser = await prisma.user.findUnique({
+      where: { dartmouthEmail },
+      include: { member: true },
     });
 
-    if (!member) return res.status(404).json({ error: "No DALI profile found for your email address" });
-    if (member.userId !== null) return res.status(409).json({ error: "This DALI profile is already linked to another account" });
+    if (!dartmouthUser) return res.status(404).json({ error: "No account found for that Dartmouth email. Make sure you have signed in with it at least once." });
+    if (dartmouthUser.member) return res.status(409).json({ error: "That Dartmouth account is already linked to a DALI profile" });
 
+    // Point Member.userId to the Dartmouth User so their login shows isMember=true
     await prisma.member.update({
       where: { id: member.id },
-      data: { userId: user.id },
+      data: { userId: dartmouthUser.id },
     });
 
     return res.json({ ok: true, memberId: member.id });

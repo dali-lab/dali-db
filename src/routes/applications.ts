@@ -3,12 +3,31 @@ import { prisma } from "../../lib/prisma.js";
 
 const router = Router();
 
-// GET /applications?userId=
+// GET /applications?userId=&term=&status=
 router.get("/", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, term, status } = req.query;
+
+    // Admin listing: filter by term (and optionally status), no userId required
     if (!userId || typeof userId !== "string") {
-      return res.status(400).json({ error: "userId query param required" });
+      const where: any = {};
+      if (term && typeof term === "string") {
+        where.term = { name: term };
+      }
+      if (status && typeof status === "string") {
+        where.status = status;
+      }
+
+      const applications = await prisma.application.findMany({
+        where,
+        include: {
+          term: true,
+          user: { select: { id: true, firstName: true, lastName: true, dartmouthEmail: true } },
+        },
+        orderBy: { submittedAt: "desc" },
+      });
+
+      return res.json(applications);
     }
 
     const applications = await prisma.application.findMany({

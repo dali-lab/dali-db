@@ -29,7 +29,7 @@ router.get("/", async (req, res) => {
         joinedTerm: { select: { name: true } },
         graduatedTerm: { select: { name: true } },
         memberTermRoles: { include: { term: { select: { name: true } }, project: { select: { id: true, name: true } } } },
-        team: true,
+        team: { include: { project: { select: { name: true } }, term: { select: { name: true } } } },
         courses: true,
       },
     });
@@ -99,7 +99,7 @@ router.get("/:id", async (req, res) => {
 router.patch("/:id", async (req, res) => {
   try {
     const {
-      daliEmail, imageUrl, classYear, major, minor, linkedinUrl,
+      fullName, daliEmail, imageUrl, classYear, major, minor, linkedinUrl, githubId,
       isActive, isAlum, graduatedTermName,
     } = req.body;
 
@@ -112,15 +112,15 @@ router.patch("/:id", async (req, res) => {
 
     const member = await prisma.member.update({
       where: { id: req.params.id },
-      data: { daliEmail, imageUrl, classYear, major, minor, linkedinUrl, isActive, isAlum, graduatedTermId },
+      data: { fullName, daliEmail, imageUrl, classYear, major, minor, linkedinUrl, githubId, isActive, isAlum, graduatedTermId },
       include: {
         user: true,
         hiredRoles: true,
         termsInDali: true,
         joinedTerm: true,
         graduatedTerm: true,
-        memberTermRoles: { include: { term: true, project: true } },
-        team: true,
+        memberTermRoles: { include: { term: { select: { name: true } }, project: { select: { id: true, name: true } } } },
+        team: { include: { project: { select: { name: true } }, term: { select: { name: true } } } },
         courses: true,
       },
     });

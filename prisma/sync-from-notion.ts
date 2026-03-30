@@ -431,6 +431,7 @@ async function syncMembers(
     const classYear = props.year?.multi_select?.[0]?.name ?? null;
     const { major, minor } = extractMajorMinor(props);
     const linkedinUrl = props.linkedin?.url || props.linkedin?.rich_text?.[0]?.plain_text || null;
+    const githubId = props.github?.url?.replace(/^https?:\/\/(www\.)?github\.com\//, "").replace(/\/$/, "") || props.github?.rich_text?.[0]?.plain_text || null;
 
     const memberTermNames = extractMemberTermNames(props);
     const termIds = memberTermNames.map(t => termIdByName.get(t)).filter((id): id is string => !!id);
@@ -469,8 +470,8 @@ async function syncMembers(
     try {
       const member = await prisma.member.upsert({
         where: { notionPageId },
-        update: { fullName, imageUrl, daliEmail, classYear, major, minor, linkedinUrl, isAlum, isActive: !isAlum, currentRole, roles, coreRoleNames, termsInDali: { set: termIds.map(id => ({ id })) } },
-        create: { fullName, imageUrl, daliEmail, joinedTermId, notionPageId, classYear, major, minor, linkedinUrl, isAlum, isActive: !isAlum, currentRole, roles, coreRoleNames, termsInDali: { connect: termIds.map(id => ({ id })) } },
+        update: { fullName, imageUrl, daliEmail, classYear, major, minor, linkedinUrl, githubId, isAlum, isActive: !isAlum, currentRole, roles, coreRoleNames, termsInDali: { set: termIds.map(id => ({ id })) } },
+        create: { fullName, imageUrl, daliEmail, joinedTermId, notionPageId, classYear, major, minor, linkedinUrl, githubId, isAlum, isActive: !isAlum, currentRole, roles, coreRoleNames, termsInDali: { connect: termIds.map(id => ({ id })) } },
       });
 
       // Sync HiredRoles
